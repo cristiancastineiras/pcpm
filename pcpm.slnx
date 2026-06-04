@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/pcpm.Cli/pcpm.Cli.csproj" />
+    <Project Path="src/pcpm.Core/pcpm.Core.csproj" />
+    <Project Path="src/pcpm.Infrastructure/pcpm.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/pcpm.Tests/pcpm.Tests.csproj" />
+  </Folder>
+</Solution>
