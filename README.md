@@ -161,4 +161,4 @@ The test suite covers:
 
 ## License
 
-TBD.
+MIT.
