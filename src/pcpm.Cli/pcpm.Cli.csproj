@@ -24,20 +24,18 @@
     MsBuildTargetsWriter.FindMsBuildAssembly() looks for it in AppContext.BaseDirectory.
   -->
   <Target Name="_CopyPcpmMsBuildDll" AfterTargets="Build;Publish">
-    <MSBuild Projects="$(MSBuildThisFileDirectory)..\pcpm.MsBuild\pcpm.MsBuild.csproj"
-             Targets="GetTargetPath"
-             Properties="Configuration=$(Configuration)">
-      <Output TaskParameter="TargetOutputs" ItemName="_PcpmMsBuildDllPath" />
-    </MSBuild>
+    <ItemGroup>
+      <_PcpmMsBuildDllPath Include="$(MSBuildThisFileDirectory)..\pcpm.MsBuild\bin\$(Configuration)\$(TargetFramework)\pcpm.MsBuild.dll" />
+    </ItemGroup>
     <Copy SourceFiles="@(_PcpmMsBuildDllPath)"
           DestinationFolder="$(OutputPath)"
           SkipUnchangedFiles="true"
-          Condition="'@(_PcpmMsBuildDllPath)' != ''" />
+          Condition="'@(_PcpmMsBuildDllPath)' != '' and Exists('%(_PcpmMsBuildDllPath.Identity)')" />
     <!-- Also copy to publish directory when publishing. -->
     <Copy SourceFiles="@(_PcpmMsBuildDllPath)"
           DestinationFolder="$(PublishDir)"
           SkipUnchangedFiles="true"
-          Condition="'$(PublishDir)' != '' and '@(_PcpmMsBuildDllPath)' != ''" />
+          Condition="'$(PublishDir)' != '' and '@(_PcpmMsBuildDllPath)' != '' and Exists('%(_PcpmMsBuildDllPath.Identity)')" />
   </Target>
 
   <ItemGroup>

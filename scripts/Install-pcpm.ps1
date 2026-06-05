@@ -72,8 +72,13 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $binary = Join-Path $publishDir 'pcpm.exe'
+$msbuildTaskDll = Join-Path $publishDir 'pcpm.MsBuild.dll'
 if (-not (Test-Path $binary)) {
     Write-Error "Expected binary not found at '$binary' after publish."
+    exit 1
+}
+if (-not (Test-Path $msbuildTaskDll)) {
+    Write-Error "Expected task DLL not found at '$msbuildTaskDll' after publish."
     exit 1
 }
 
@@ -90,7 +95,9 @@ if (-not (Test-Path $storeDir)) {
 }
 
 Copy-Item -Path $binary -Destination $PcpmHome -Force
-Write-Host "  pcpm.exe  ->  $PcpmHome" -ForegroundColor Green
+Copy-Item -Path $msbuildTaskDll -Destination $PcpmHome -Force
+Write-Host "  pcpm.exe        ->  $PcpmHome" -ForegroundColor Green
+Write-Host "  pcpm.MsBuild.dll ->  $PcpmHome" -ForegroundColor Green
 
 # ---------------------------------------------------------------------------
 # 4. Set PCPM_HOME user environment variable (persistent, no admin needed)

@@ -116,7 +116,18 @@ public sealed class MultiFeedNuGetFeed : INuGetFeed
 
     private static HttpClient BuildHttpClient(FeedConfig config)
     {
-        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        var handler = new HttpClientHandler
+        {
+            AutomaticDecompression =
+                System.Net.DecompressionMethods.GZip |
+                System.Net.DecompressionMethods.Deflate |
+                System.Net.DecompressionMethods.Brotli,
+        };
+
+        var client = new HttpClient(handler, disposeHandler: true)
+        {
+            Timeout = TimeSpan.FromSeconds(30),
+        };
         client.DefaultRequestHeaders.UserAgent.ParseAdd("pcpm/0.1.0 (+https://github.com/local/pcpm)");
 
         if (config.Auth?.EnvVar is { } envVar)

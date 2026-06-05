@@ -10,6 +10,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\pcpm.Core\pcpm.Core.csproj" />
     <ProjectReference Include="..\..\src\pcpm.Infrastructure\pcpm.Infrastructure.csproj" />
+    <!-- pcpm.Cli is an Exe, but referencing it for tests is fine: the test
+         assembly just bundles the CLI classes it needs. We intentionally do NOT
+         mark it PrivateAssets=anything so the build wires the reference in. -->
+    <ProjectReference Include="..\..\src\pcpm.Cli\pcpm.Cli.csproj" />
   </ItemGroup>
 
   <ItemGroup>

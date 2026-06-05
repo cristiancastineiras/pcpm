@@ -130,6 +130,14 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
                 return await _resolver.ResolveAsync(directDeps.Values.ToList(), tfm, _feed, ct).ConfigureAwait(false);
             });
 
+        // Print TFM/compatibility or feed warnings from the resolver early,
+        // so users can see diagnostics even when we return due to conflicts.
+        if (result.Warnings.Count > 0)
+        {
+            foreach (var w in result.Warnings)
+                _console.MarkupLine($"  [yellow]⚠[/]  {Markup.Escape(w.Message)}");
+        }
+
         if (result.HasConflicts)
         {
             result = await AutoResolveConflictsAsync(result, directDeps, tfm, root, ct).ConfigureAwait(false);
@@ -145,13 +153,6 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
                 }
                 return 1;
             }
-        }
-
-        // Print TFM/compatibility warnings from the resolver.
-        if (result.Warnings.Count > 0)
-        {
-            foreach (var w in result.Warnings)
-                _console.MarkupLine($"  [yellow]⚠[/]  {Markup.Escape(w.Message)}");
         }
 
         var totalResolved = result.Resolved.Count;

@@ -94,7 +94,11 @@ public sealed class DependencyResolver : IDependencyResolver
         IReadOnlyList<PackageVersion> versions;
         try { versions = await feed.ListVersionsAsync(id, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
-        catch { return (null, null); }
+        catch (Exception ex)
+        {
+            return (null, new ResolutionWarning(id, PackageVersion.Create("0.0.0"),
+                $"Failed to list versions for {id.Value}: {ex.GetType().Name}: {ex.Message}"));
+        }
 
         if (requests.Count == 0) return (null, null);
         var chosen = ChooseBestVersion(versions, requests);
@@ -103,7 +107,11 @@ public sealed class DependencyResolver : IDependencyResolver
         PackageMetadata metadata;
         try { metadata = await feed.GetMetadataAsync(id, chosen.Value, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
-        catch { return (null, null); }
+        catch (Exception ex)
+        {
+            return (null, new ResolutionWarning(id, chosen.Value,
+                $"Failed to get metadata for {id.Value} {chosen.Value}: {ex.GetType().Name}: {ex.Message}"));
+        }
 
         var (deps, warning) = SelectDependencyGroup(metadata, targetFramework, id, chosen.Value);
         return (new ResolvedPackage(id, chosen.Value, deps), warning);

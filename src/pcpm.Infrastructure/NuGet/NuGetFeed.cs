@@ -178,9 +178,11 @@ public sealed class NuGetFeed : INuGetFeed
 
         try
         {
-            // page.PageId is an absolute URL — HttpClient handles absolute URIs fine.
+            // Some feeds (nuget.org) encode registration pages as index.json#page/x/y.
+            // Convert those fragment-style IDs to real page endpoints before fetching.
+            var pageUrl = ResolvePageUrl(page.PageId);
             var fetched = await _http.GetFromJsonAsync<RegistrationPage>(
-                page.PageId, Options, CancellationToken.None).ConfigureAwait(false);
+                pageUrl, Options, CancellationToken.None).ConfigureAwait(false);
             return fetched ?? page;
         }
         catch (Exception ex)
@@ -188,6 +190,24 @@ public sealed class NuGetFeed : INuGetFeed
             _logger.LogDebug(ex, "Failed to hydrate registration page {Url}", page.PageId);
             return page;
         }
+    }
+
+    private static string ResolvePageUrl(string pageId)
+    {
+        if (!Uri.TryCreate(pageId, UriKind.Absolute, out var uri)) return pageId;
+
+        var fragment = uri.Fragment;
+        if (string.IsNullOrEmpty(fragment)) return pageId;
+
+        var frag = fragment.TrimStart('#');
+        if (!frag.StartsWith("page/", StringComparison.OrdinalIgnoreCase)) return pageId;
+
+        var abs = uri.GetLeftPart(UriPartial.Path);
+        const string indexJson = "/index.json";
+        if (!abs.EndsWith(indexJson, StringComparison.OrdinalIgnoreCase)) return pageId;
+
+        var basePath = abs[..^indexJson.Length];
+        return $"{basePath}/{frag}.json";
     }
 
     /// <summary>
@@ -257,9 +277,9 @@ internal sealed record RegistrationPage(
     IReadOnlyList<RegistrationLeaf>? Items);
 
 internal sealed record RegistrationLeaf(
-    string Id,
-    string Version,
-    RegistrationCatalogEntry? CatalogEntry,
+    string? Id = null,
+    string? Version = null,
+    RegistrationCatalogEntry? CatalogEntry = null,
     IReadOnlyList<VulnerabilityDto>? Vulnerabilities = null);
 
 internal sealed record VulnerabilityDto(
