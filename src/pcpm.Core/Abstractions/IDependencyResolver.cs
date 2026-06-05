@@ -34,6 +34,9 @@ public sealed record ResolutionResult(
     IReadOnlyList<ResolutionConflict> Conflicts)
 {
     public bool HasConflicts => Conflicts.Count > 0;
+
+    /// <summary>Non-fatal warnings from resolution, e.g. TFM compatibility notes.</summary>
+    public IReadOnlyList<ResolutionWarning> Warnings { get; init; } = [];
 }
 
 /// <summary>A single resolved package and its pinned dependencies.</summary>
@@ -51,3 +54,9 @@ public sealed record ResolutionConflict(
 public sealed record VersionRangeRequest(
     string Requester,
     string Range);
+
+/// <summary>
+/// A non-fatal advisory from the dependency resolver, e.g. a package that has no dependency
+/// group for the workspace TFM and had to fall back to a different group.
+/// </summary>
+public sealed record ResolutionWarning(PackageId Id, PackageVersion Version, string Message);

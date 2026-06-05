@@ -14,7 +14,20 @@ public sealed record PackageMetadata(
     [property: JsonPropertyName("licenseUrl")] string? LicenseUrl,
     [property: JsonPropertyName("published")] DateTimeOffset? Published,
     [property: JsonPropertyName("packageContent")] string PackageContentUrl,
-    [property: JsonPropertyName("dependencyGroups")] IReadOnlyList<DependencyGroup> DependencyGroups);
+    [property: JsonPropertyName("dependencyGroups")] IReadOnlyList<DependencyGroup> DependencyGroups)
+{
+    /// <summary>
+    /// SPDX license expression (e.g. "MIT", "Apache-2.0"), when declared by the package author.
+    /// Populated from the <c>licenseExpression</c> field of the NuGet registration catalog entry.
+    /// </summary>
+    public string? LicenseExpression { get; init; }
+
+    /// <summary>
+    /// Known security advisories for this package version, from the NuGet registration API.
+    /// Empty for packages with no known vulnerabilities.
+    /// </summary>
+    public IReadOnlyList<PackageVulnerability> Vulnerabilities { get; init; } = [];
+}
 
 /// <summary>
 /// A target-framework-grouped dependency list (matches NuGet's nuspec dependencyGroups shape).

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>pcpm.MsBuild</RootNamespace>
+    <AssemblyName>pcpm.MsBuild</AssemblyName>
+    <Description>MSBuild task that replaces NuGet DLL copies in bin/ with NTFS hardlinks (pnpm-style). Saves disk space in monorepos.</Description>
+    <!--
+      Disable transitive pinning for this project only: Microsoft.Build.* packages have many
+      transitive deps that we do not want to enumerate in Directory.Packages.props, and since
+      they are compile-only (ExcludeAssets=runtime), they have zero runtime impact on consumers.
+    -->
+    <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Compile-only references: MSBuild provides these assemblies at task-load time.
+      PrivateAssets=all  → these packages do NOT flow to any consuming project.
+      ExcludeAssets=runtime → the DLLs are NOT copied to our build output, keeping
+                              pcpm.MsBuild.dll lean and free of MSBuild assemblies.
+    -->
+    <PackageReference Include="Microsoft.Build.Utilities.Core" PrivateAssets="all" ExcludeAssets="runtime" />
+    <PackageReference Include="Microsoft.Build.Framework" PrivateAssets="all" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+</Project>

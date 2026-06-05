@@ -9,12 +9,12 @@ using pcpm.Core.Models;
 namespace pcpm.Infrastructure.NuGet;
 
 /// <summary>
-/// NuGet v3 feed client. Speaks the public <c>https://api.nuget.org/v3/index.json</c> protocol:
+/// NuGet v3 feed client. Discovers service URLs from the index endpoint so it works with
+/// any v3 feed: nuget.org, Azure Artifacts, GitHub Packages, Artifactory, etc.
 /// <list type="bullet">
-///   <item>List versions: <c>GET /v3/registration5-semver1/{lowerId}/index.json</c></item>
-///   <item>Get metadata:  same URL, page through catalog entries</item>
-///   <item>Download .nupkg: <c>GET &lt;packageContent URL&gt;</c> (a CDN URL like
-///   <c>https://api.nuget.org/v3-flatcontainer/&lt;lowerId&gt;/&lt;version&gt;/&lt;id&gt;.&lt;version&gt;.nupkg</c>)</item>
+///   <item>Service index: <c>GET {indexUrl}</c></item>
+///   <item>Versions + metadata: registration API discovered via service index</item>
+///   <item>Download: flat-container API discovered via service index</item>
 /// </list>
 /// </summary>
 public sealed class NuGetFeed : INuGetFeed
@@ -30,13 +30,10 @@ public sealed class NuGetFeed : INuGetFeed
     private readonly ILogger<NuGetFeed> _logger;
     private readonly string _indexUrl;
 
-    /// <summary>
-    /// Per-instance cache of registration indexes keyed by lower-case package id.
-    /// Eliminates the duplicate HTTP round-trip between ListVersionsAsync and GetMetadataAsync,
-    /// and deduplicates concurrent requests for the same package during parallel resolution.
-    /// Uses <see cref="CancellationToken.None"/> in the factory so one caller's cancellation
-    /// cannot poison the shared entry.
-    /// </summary>
+    /// <summary>Lazily resolved service URLs (registration base + flat-container base).</summary>
+    private readonly Lazy<Task<ServiceUrls>> _serviceUrls;
+
+    /// <summary>Per-instance registration-index cache keyed by lower-case package id.</summary>
     private readonly ConcurrentDictionary<string, Task<RegistrationIndex?>> _indexCache = new(StringComparer.OrdinalIgnoreCase);
 
     public NuGetFeed(HttpClient http, ILogger<NuGetFeed> logger, string indexUrl = "https://api.nuget.org/v3/index.json")
@@ -44,12 +41,10 @@ public sealed class NuGetFeed : INuGetFeed
         _http = http;
         _logger = logger;
         _indexUrl = indexUrl;
-
-        if (_http.BaseAddress is null)
-        {
-            _http.BaseAddress = new Uri("https://api.nuget.org/");
-        }
+        _serviceUrls = new Lazy<Task<ServiceUrls>>(FetchServiceUrlsAsync);
     }
+
+    // ---- INuGetFeed ----
 
     public async Task<IReadOnlyList<PackageVersion>> ListVersionsAsync(PackageId id, CancellationToken ct)
     {
@@ -106,7 +101,10 @@ public sealed class NuGetFeed : INuGetFeed
                 {
                     var entry = leaf.CatalogEntry
                         ?? throw new NuGetFeedException($"No catalog entry for '{id.Value}' {version}.");
-                    return entry.ToPackageMetadata(id);
+                    var vulns = (leaf.Vulnerabilities ?? [])
+                        .Select(v => new PackageVulnerability(v.AdvisoryUrl, v.Severity ?? "0"))
+                        .ToList();
+                    return entry.ToPackageMetadata(id, vulns);
                 }
             }
         }
@@ -116,8 +114,10 @@ public sealed class NuGetFeed : INuGetFeed
 
     public async Task DownloadPackageAsync(PackageId id, PackageVersion version, string destinationPath, CancellationToken ct)
     {
-
-        var url = $"v3-flatcontainer/{id.Value.ToLowerInvariant()}/{version.ToString().ToLowerInvariant()}/{id.Value.ToLowerInvariant()}.{version.ToString().ToLowerInvariant()}.nupkg";
+        var urls = await _serviceUrls.Value.ConfigureAwait(false);
+        var lowerId = id.Value.ToLowerInvariant();
+        var lowerVer = version.ToString().ToLowerInvariant();
+        var url = $"{urls.FlatContainerBase}{lowerId}/{lowerVer}/{lowerId}.{lowerVer}.nupkg";
         _logger.LogDebug("Downloading {PackageId} {Version} from {Url}", id.Value, version, url);
 
         var dir = Path.GetDirectoryName(destinationPath);
@@ -132,7 +132,7 @@ public sealed class NuGetFeed : INuGetFeed
         await src.CopyToAsync(dst, ct).ConfigureAwait(false);
     }
 
-    // -- private helpers --
+    // ---- private helpers ----
 
     /// <summary>
     /// Fetch the registration index for <paramref name="id"/>, caching the in-flight <see cref="Task"/>
@@ -152,8 +152,9 @@ public sealed class NuGetFeed : INuGetFeed
     /// </summary>
     private async Task<RegistrationIndex?> FetchAndHydrateAsync(string lowerId)
     {
+        var urls = await _serviceUrls.Value.ConfigureAwait(false);
         var index = await _http.GetFromJsonAsync<RegistrationIndex>(
-            $"v3/registration5-semver1/{lowerId}/index.json",
+            $"{urls.RegistrationBase}{lowerId}/index.json",
             Options,
             CancellationToken.None).ConfigureAwait(false);
 
@@ -188,6 +189,39 @@ public sealed class NuGetFeed : INuGetFeed
             return page;
         }
     }
+
+    /// <summary>
+    /// Queries the NuGet v3 service index to discover the correct registration and
+    /// flat-container base URLs. Falls back to nuget.org-compatible paths on failure.
+    /// </summary>
+    private async Task<ServiceUrls> FetchServiceUrlsAsync()
+    {
+        try
+        {
+            var si = await _http.GetFromJsonAsync<ServiceIndexResponse>(_indexUrl, Options, CancellationToken.None).ConfigureAwait(false);
+            if (si?.Resources is { Count: > 0 })
+            {
+                // Prefer newer registration versions; fall back gracefully.
+                var regBase = si.Resources.FirstOrDefault(r => r.Type == "RegistrationsBaseUrl/3.6.0")?.Id
+                           ?? si.Resources.FirstOrDefault(r => r.Type == "RegistrationsBaseUrl/3.4.0")?.Id
+                           ?? si.Resources.FirstOrDefault(r => r.Type is "RegistrationsBaseUrl/3.0.0" or "RegistrationsBaseUrl")?.Id;
+                var flatBase = si.Resources.FirstOrDefault(r => r.Type == "PackageBaseAddress/3.0.0")?.Id;
+
+                if (!string.IsNullOrEmpty(regBase) && !string.IsNullOrEmpty(flatBase))
+                    return new ServiceUrls(EnsureSlash(regBase), EnsureSlash(flatBase));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Service index fetch failed for {Url}, using fallback URLs", _indexUrl);
+        }
+
+        // Fall back to nuget.org-style relative paths resolved against the index URL.
+        var origin = new Uri(_indexUrl).GetLeftPart(UriPartial.Authority);
+        return new ServiceUrls($"{origin}/v3/registration5-semver1/", $"{origin}/v3-flatcontainer/");
+    }
+
+    private static string EnsureSlash(string url) => url.EndsWith('/') ? url : url + "/";
 }
 
 /// <summary>Wrapper to surface NuGet-protocol errors as our own exception type.</summary>
@@ -196,6 +230,20 @@ public sealed class NuGetFeedException : Exception
     public NuGetFeedException(string message) : base(message) { }
     public NuGetFeedException(string message, Exception inner) : base(message, inner) { }
 }
+
+// -- Service URL cache --
+
+internal sealed record ServiceUrls(string RegistrationBase, string FlatContainerBase);
+
+// -- Wire models for the NuGet v3 service index --
+
+internal sealed record ServiceIndexResponse(
+    string Version,
+    [property: JsonPropertyName("resources")] IReadOnlyList<ServiceIndexResource>? Resources);
+
+internal sealed record ServiceIndexResource(
+    [property: JsonPropertyName("@id")] string Id,
+    [property: JsonPropertyName("@type")] string Type);
 
 // -- Wire models for the registration API. Field names are camelCase to match the JSON. --
 
@@ -211,7 +259,12 @@ internal sealed record RegistrationPage(
 internal sealed record RegistrationLeaf(
     string Id,
     string Version,
-    RegistrationCatalogEntry? CatalogEntry);
+    RegistrationCatalogEntry? CatalogEntry,
+    IReadOnlyList<VulnerabilityDto>? Vulnerabilities = null);
+
+internal sealed record VulnerabilityDto(
+    [property: JsonPropertyName("advisoryUrl")] string AdvisoryUrl,
+    [property: JsonPropertyName("severity")] string? Severity);
 
 internal sealed record RegistrationCatalogEntry(
     string Id,
@@ -220,11 +273,12 @@ internal sealed record RegistrationCatalogEntry(
     string? Authors,                                 // NuGet returns this as a comma-separated string OR an array
     string? ProjectUrl,
     string? LicenseUrl,
+    [property: JsonPropertyName("licenseExpression")] string? LicenseExpression,
     DateTimeOffset? Published,
     string? PackageContent,
     IReadOnlyList<DependencyGroupDto>? DependencyGroups)
 {
-    public PackageMetadata ToPackageMetadata(PackageId id) => new(
+    public PackageMetadata ToPackageMetadata(PackageId id, IReadOnlyList<PackageVulnerability>? vulnerabilities = null) => new(
         Id: id,
         Version: PackageVersion.Create(Version),
         Description: Description,
@@ -236,7 +290,11 @@ internal sealed record RegistrationCatalogEntry(
         DependencyGroups: (DependencyGroups ?? Array.Empty<DependencyGroupDto>())
             .Select(g => new DependencyGroup(g.TargetFramework, (g.Dependencies ?? Array.Empty<DependencyDto>())
                 .Select(d => new RawDependency(d.Id, d.Range)).ToList()))
-            .ToList());
+            .ToList())
+    {
+        LicenseExpression = LicenseExpression,
+        Vulnerabilities = vulnerabilities ?? [],
+    };
 
     private static IReadOnlyList<string> ParseAuthors(string? raw)
     {

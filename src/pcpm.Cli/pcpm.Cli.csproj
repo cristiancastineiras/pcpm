@@ -10,7 +10,35 @@
   <ItemGroup>
     <ProjectReference Include="..\pcpm.Core\pcpm.Core.csproj" />
     <ProjectReference Include="..\pcpm.Infrastructure\pcpm.Infrastructure.csproj" />
+    <!--
+      ReferenceOutputAssembly=false: pcpm.MsBuild is a task DLL, not a runtime dependency.
+      We still need it built before pcpm.Cli so we can copy it to the output directory,
+      where MsBuildTargetsWriter will find it via AppContext.BaseDirectory.
+    -->
+    <ProjectReference Include="..\pcpm.MsBuild\pcpm.MsBuild.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <!--
+    Copy pcpm.MsBuild.dll next to the pcpm executable after each build/publish.
+    MsBuildTargetsWriter.FindMsBuildAssembly() looks for it in AppContext.BaseDirectory.
+  -->
+  <Target Name="_CopyPcpmMsBuildDll" AfterTargets="Build;Publish">
+    <MSBuild Projects="$(MSBuildThisFileDirectory)..\pcpm.MsBuild\pcpm.MsBuild.csproj"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration)">
+      <Output TaskParameter="TargetOutputs" ItemName="_PcpmMsBuildDllPath" />
+    </MSBuild>
+    <Copy SourceFiles="@(_PcpmMsBuildDllPath)"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true"
+          Condition="'@(_PcpmMsBuildDllPath)' != ''" />
+    <!-- Also copy to publish directory when publishing. -->
+    <Copy SourceFiles="@(_PcpmMsBuildDllPath)"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != '' and '@(_PcpmMsBuildDllPath)' != ''" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" />

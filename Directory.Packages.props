@@ -21,6 +21,10 @@
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.0" />
 
+    <!-- MSBuild task APIs (compile-only; ExcludeAssets=runtime in pcpm.MsBuild.csproj) -->
+    <PackageVersion Include="Microsoft.Build.Utilities.Core" Version="17.13.9" />
+    <PackageVersion Include="Microsoft.Build.Framework" Version="17.13.9" />
+
     <!-- NuGet protocol (semver, range & TFM compatibility logic) -->
     <PackageVersion Include="NuGet.Frameworks" Version="6.13.2" />
     <PackageVersion Include="NuGet.Versioning" Version="6.13.2" />

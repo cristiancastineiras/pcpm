@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using pcpm.Core.Abstractions;
 using pcpm.Core.Models;
+using pcpm.Infrastructure.MsBuild;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -47,6 +48,7 @@ public sealed class AddCommand : AsyncCommand<AddCommand.Settings>
     private readonly IDependencyResolver _resolver;
     private readonly IProcessRunner _process;
     private readonly IAnsiConsole _console;
+    private readonly MsBuildTargetsWriter _targetsWriter;
 
     public AddCommand(
         IFileSystem fs,
@@ -59,7 +61,8 @@ public sealed class AddCommand : AsyncCommand<AddCommand.Settings>
         ILockfileService @lock,
         IDependencyResolver resolver,
         IProcessRunner process,
-        IAnsiConsole console)
+        IAnsiConsole console,
+        MsBuildTargetsWriter targetsWriter)
     {
         _fs = fs;
         _cpm = cpm;
@@ -72,6 +75,7 @@ public sealed class AddCommand : AsyncCommand<AddCommand.Settings>
         _resolver = resolver;
         _process = process;
         _console = console;
+        _targetsWriter = targetsWriter;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -146,7 +150,7 @@ public sealed class AddCommand : AsyncCommand<AddCommand.Settings>
         // 4. Implicit install
         if (!settings.NoInstall)
         {
-            var install = new InstallCommand(_fs, _cpm, _projects, _discovery, _workspace, _feed, _store, _lock, _resolver, _process, _console);
+            var install = new InstallCommand(_fs, _cpm, _projects, _discovery, _workspace, _feed, _store, _lock, _resolver, _process, _console, _targetsWriter);
             return await install.ExecuteAsync(context, new InstallCommand.Settings()).ConfigureAwait(false);
         }
 

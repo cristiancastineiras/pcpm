@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using pcpm.Core.Abstractions;
 using pcpm.Core.Models;
+using pcpm.Infrastructure.MsBuild;
 using pcpm.Infrastructure.Store;
 using Spectre.Console;
 using Spectre.Console.Cli;
@@ -39,6 +40,7 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
     private readonly IDependencyResolver _resolver;
     private readonly IProcessRunner _process;
     private readonly IAnsiConsole _console;
+    private readonly MsBuildTargetsWriter _targetsWriter;
 
     public InstallCommand(
         IFileSystem fs,
@@ -51,7 +53,8 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
         ILockfileService @lock,
         IDependencyResolver resolver,
         IProcessRunner process,
-        IAnsiConsole console)
+        IAnsiConsole console,
+        MsBuildTargetsWriter targetsWriter)
     {
         _fs = fs;
         _cpm = cpm;
@@ -64,6 +67,7 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
         _resolver = resolver;
         _process = process;
         _console = console;
+        _targetsWriter = targetsWriter;
     }
 
     public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
@@ -143,6 +147,13 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
             }
         }
 
+        // Print TFM/compatibility warnings from the resolver.
+        if (result.Warnings.Count > 0)
+        {
+            foreach (var w in result.Warnings)
+                _console.MarkupLine($"  [yellow]⚠[/]  {Markup.Escape(w.Message)}");
+        }
+
         var totalResolved = result.Resolved.Count;
         PrintProgressLine(totalResolved, reused: 0, downloaded: 0, added: 0);
 
@@ -220,7 +231,10 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
 
         // 7. Run dotnet restore.
         if (!settings.NoRestore)
-            await RunDotnetRestoreAsync(root, ct).ConfigureAwait(false);
+            await RunDotnetRestoreAsync(root, projectPaths, ct).ConfigureAwait(false);
+
+        // 8. Write Directory.Build.targets so projects can opt into bin/ hardlinking.
+        await _targetsWriter.WriteAsync(root, ct).ConfigureAwait(false);
 
         sw.Stop();
         _console.MarkupLine($"\n[bold green]Done[/] [grey]in {sw.Elapsed.TotalSeconds:F1}s[/]");
@@ -289,31 +303,98 @@ public sealed class InstallCommand : AsyncCommand<InstallCommand.Settings>
         }
     }
 
-    private async Task RunDotnetRestoreAsync(string root, CancellationToken ct)
+    private async Task RunDotnetRestoreAsync(string root, IReadOnlyList<string> projectPaths, CancellationToken ct)
     {
-        var target = Directory.EnumerateFiles(root, "*.slnx", SearchOption.TopDirectoryOnly).FirstOrDefault()
-                     ?? Directory.EnumerateFiles(root, "*.sln", SearchOption.TopDirectoryOnly).FirstOrDefault()
-                     ?? Directory.EnumerateFiles(root, "*.csproj", SearchOption.TopDirectoryOnly).FirstOrDefault();
-        if (target is null)
+        var targets = FindRestoreTargets(root, projectPaths);
+        if (targets.Count == 0)
         {
-            _console.MarkupLine("[grey]No solution or project file at the root — skipping dotnet restore.[/]");
+            _console.MarkupLine("[grey]No solution or project file found — skipping dotnet restore.[/]");
             return;
         }
 
-        _console.MarkupLine($"[grey]Running[/] [cyan]dotnet restore[/] [grey]on[/] [yellow]{Path.GetFileName(target)}[/]");
+        foreach (var target in targets)
+            await RestoreSingleAsync(target, root, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Discovers what to pass to <c>dotnet restore</c> for a workspace that may contain
+    /// multiple sub-solutions or standalone projects (multi-root layout).
+    ///
+    /// <para>Resolution order:</para>
+    /// <list type="number">
+    ///   <item>Solution files (<c>.sln</c>/<c>.slnx</c>) directly in <paramref name="root"/>.</item>
+    ///   <item>If none at root: solutions in immediate sub-directories; for sub-directories
+    ///         that have no solution, standalone <c>.csproj</c> files at their top level.</item>
+    ///   <item>Fallback: <c>.csproj</c> files at the root itself.</item>
+    ///   <item>Ultimate fallback: the already-discovered <paramref name="projectPaths"/>.</item>
+    /// </list>
+    /// </summary>
+    private static IReadOnlyList<string> FindRestoreTargets(string root, IReadOnlyList<string> projectPaths)
+    {
+        // Level 0: solutions/projects directly at the workspace root.
+        var rootSolutions = Directory
+            .EnumerateFiles(root, "*.slnx", SearchOption.TopDirectoryOnly)
+            .Concat(Directory.EnumerateFiles(root, "*.sln", SearchOption.TopDirectoryOnly))
+            .ToList();
+
+        if (rootSolutions.Count > 0) return rootSolutions;
+
+        // Single-project root — one .csproj directly at root.
+        var rootCsproj = Directory
+            .EnumerateFiles(root, "*.csproj", SearchOption.TopDirectoryOnly)
+            .ToList();
+        if (rootCsproj.Count > 0) return rootCsproj;
+
+        // Multi-root: check one level of sub-directories.
+        var subdirTargets = new List<string>();
+        foreach (var subdir in Directory.EnumerateDirectories(root))
+        {
+            // Skip hidden folders (e.g. .git, .pcpm).
+            var dirName = Path.GetFileName(subdir);
+            if (dirName.StartsWith('.')) continue;
+
+            var subSolutions = Directory
+                .EnumerateFiles(subdir, "*.slnx", SearchOption.TopDirectoryOnly)
+                .Concat(Directory.EnumerateFiles(subdir, "*.sln", SearchOption.TopDirectoryOnly))
+                .ToList();
+
+            if (subSolutions.Count > 0)
+            {
+                subdirTargets.AddRange(subSolutions);
+            }
+            else
+            {
+                // No solution in this sub-directory — restore individual .csproj files.
+                subdirTargets.AddRange(
+                    Directory.EnumerateFiles(subdir, "*.csproj", SearchOption.TopDirectoryOnly));
+            }
+        }
+
+        if (subdirTargets.Count > 0)
+            return subdirTargets.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        // Ultimate fallback: all projects found by the workspace discovery.
+        return projectPaths;
+    }
+
+    private async Task RestoreSingleAsync(string target, string root, CancellationToken ct)
+    {
+        _console.MarkupLine(
+            $"[grey]Running[/] [cyan]dotnet restore[/] [grey]on[/] [yellow]{Path.GetRelativePath(root, target)}[/]");
+
         var result = await _process.RunAsync(
             new ProcessRequest("dotnet", new[] { "restore", target }, root),
             ct).ConfigureAwait(false);
 
         if (result.Succeeded)
         {
-            _console.MarkupLine("[green]✓ dotnet restore succeeded[/]");
+            _console.MarkupLine($"[green]✓[/] [grey]{Path.GetFileName(target)} — restored[/]");
         }
         else
         {
-            _console.MarkupLine("[red]dotnet restore failed:[/]");
-            _console.WriteLine(result.StandardError);
-            _console.WriteLine(result.StandardOutput);
+            _console.MarkupLine($"[red]dotnet restore failed for {Markup.Escape(Path.GetFileName(target))}:[/]");
+            if (!string.IsNullOrWhiteSpace(result.StandardError)) _console.WriteLine(result.StandardError);
+            if (!string.IsNullOrWhiteSpace(result.StandardOutput)) _console.WriteLine(result.StandardOutput);
         }
     }
 

@@ -9,6 +9,7 @@ using pcpm.Infrastructure.Conversion;
 using pcpm.Infrastructure.Cpm;
 using pcpm.Infrastructure.FileSystem;
 using pcpm.Infrastructure.Lockfiles;
+using pcpm.Infrastructure.MsBuild;
 using pcpm.Infrastructure.NuGet;
 using pcpm.Infrastructure.Process;
 using pcpm.Infrastructure.Project;
@@ -65,10 +66,15 @@ public static class Program
         services.AddSingleton<IDependencyResolver, DependencyResolver>();
         services.AddSingleton<ConfigurationLoader>();
 
-        services.AddHttpClient<INuGetFeed, NuGetFeed>(client =>
+        // ---- NuGet feed (single or multi-feed with auth, from pcpm.json) ----
+        services.AddSingleton<INuGetFeed>(sp =>
         {
-            client.Timeout = TimeSpan.FromSeconds(30);
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("pcpm/0.1.0 (+https://github.com/local/pcpm)");
+            var feedLogger = sp.GetRequiredService<ILogger<NuGetFeed>>();
+            var multiLogger = sp.GetRequiredService<ILogger<MultiFeedNuGetFeed>>();
+            var cfgLoader = sp.GetRequiredService<ConfigurationLoader>();
+            var pcpmCfg = cfgLoader.LoadOrDefaultAsync(Directory.GetCurrentDirectory(), CancellationToken.None)
+                              .GetAwaiter().GetResult();
+            return MultiFeedNuGetFeed.Create(pcpmCfg, feedLogger, multiLogger);
         });
 
         services.AddSingleton<IPackageStore>(sp =>
@@ -87,6 +93,7 @@ public static class Program
 
         services.AddSingleton<IWorkspaceLocator>(_ => new WorkspaceLocator());
         services.AddSingleton<IAnsiConsole>(_ => AnsiConsole.Console);
+        services.AddSingleton<MsBuildTargetsWriter>();
 
         var registrar = new TypeRegistrar(services);
         var app = new CommandApp(registrar);
@@ -131,6 +138,19 @@ public static class Program
                 .WithExample(["convert"])
                 .WithExample(["convert", "--dry-run"])
                 .WithExample(["convert", "--revert"]);
+            c.AddCommand<DoctorCommand>("doctor")
+                .WithDescription("Check workspace health: CPM correctness, CVEs, orphaned entries, lockfile sync.")
+                .WithExample(["doctor"])
+                .WithExample(["doctor", "--no-cve"]);
+            c.AddCommand<AuditCommand>("audit")
+                .WithDescription("Security and license audit with optional SBOM generation.")
+                .WithExample(["audit"])
+                .WithExample(["audit", "--no-sbom"])
+                .WithExample(["audit", "--output", "./reports"]);
+            c.AddCommand<CiCommand>("ci")
+                .WithDescription("CI-optimised install: verifies lockfile sync, restores from store, runs dotnet restore.")
+                .WithExample(["ci"])
+                .WithExample(["ci", "--locked-mode"]);
         });
 
         return await app.RunAsync(args).ConfigureAwait(false);

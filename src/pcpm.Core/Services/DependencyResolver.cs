@@ -35,6 +35,7 @@ public sealed class DependencyResolver : IDependencyResolver
         //   their versions + metadata concurrently.  Results are collected single-threadedly
         //   before the next wave so constraint accumulation stays correct.
         var wave = new HashSet<PackageId>(directDependencies.Select(d => d.Id));
+        var allWarnings = new List<ResolutionWarning>();
 
         while (wave.Count > 0)
         {
@@ -55,8 +56,9 @@ public sealed class DependencyResolver : IDependencyResolver
             var waveResults = await Task.WhenAll(waveTasks).ConfigureAwait(false);
 
             var nextWave = new HashSet<PackageId>();
-            foreach (var pkg in waveResults)
+            foreach (var (pkg, warning) in waveResults)
             {
+                if (warning is not null) allWarnings.Add(warning);
                 if (pkg is null) continue;   // conflict or transient error
                 resolved[pkg.Id] = pkg;
                 foreach (var dep in pkg.Dependencies)
@@ -71,17 +73,18 @@ public sealed class DependencyResolver : IDependencyResolver
         }
 
         var conflicts = BuildConflicts(constraints, resolved);
-        return new ResolutionResult(resolved, conflicts);
+        return new ResolutionResult(resolved, conflicts) { Warnings = allWarnings };
     }
 
     // -- private helpers --
 
     /// <summary>
     /// Resolve a single package: list available versions, pick the best one satisfying
-    /// <paramref name="requests"/>, fetch its metadata, and return the resolved package.
-    /// Returns <c>null</c> on transient feed errors or unsatisfiable constraints.
+    /// <paramref name="requests"/>, fetch its metadata, and return the resolved package
+    /// along with any TFM-compatibility warning.
+    /// Returns <c>(null, null)</c> on transient feed errors or unsatisfiable constraints.
     /// </summary>
-    private static async Task<ResolvedPackage?> ResolveOneAsync(
+    private static async Task<(ResolvedPackage? Package, ResolutionWarning? Warning)> ResolveOneAsync(
         PackageId id,
         IReadOnlyList<VersionRangeRequest> requests,
         string targetFramework,
@@ -91,19 +94,19 @@ public sealed class DependencyResolver : IDependencyResolver
         IReadOnlyList<PackageVersion> versions;
         try { versions = await feed.ListVersionsAsync(id, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
-        catch { return null; }
+        catch { return (null, null); }
 
-        if (requests.Count == 0) return null;
+        if (requests.Count == 0) return (null, null);
         var chosen = ChooseBestVersion(versions, requests);
-        if (chosen is null) return null;
+        if (chosen is null) return (null, null);
 
         PackageMetadata metadata;
         try { metadata = await feed.GetMetadataAsync(id, chosen.Value, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
-        catch { return null; }
+        catch { return (null, null); }
 
-        var deps = SelectDependencyGroup(metadata, targetFramework);
-        return new ResolvedPackage(id, chosen.Value, deps);
+        var (deps, warning) = SelectDependencyGroup(metadata, targetFramework, id, chosen.Value);
+        return (new ResolvedPackage(id, chosen.Value, deps), warning);
     }
 
     private static PackageVersion? ChooseBestVersion(
@@ -127,12 +130,15 @@ public sealed class DependencyResolver : IDependencyResolver
     /// Selects the best matching dependency group for <paramref name="targetFramework"/>
     /// using the real NuGet framework compatibility/reduction logic
     /// (<see cref="FrameworkReducer"/>), exactly as <c>dotnet restore</c> does.
+    /// Returns the dependencies and an optional TFM-compatibility warning.
     /// </summary>
-    private static IReadOnlyList<PackageDependency> SelectDependencyGroup(
+    private static (IReadOnlyList<PackageDependency> Deps, ResolutionWarning? Warning) SelectDependencyGroup(
         PackageMetadata metadata,
-        string targetFramework)
+        string targetFramework,
+        PackageId id,
+        PackageVersion version)
     {
-        if (metadata.DependencyGroups.Count == 0) return Array.Empty<PackageDependency>();
+        if (metadata.DependencyGroups.Count == 0) return (Array.Empty<PackageDependency>(), null);
 
         // Parse the project TFM once.
         var projectFw = NuGetFramework.ParseFolder(targetFramework);
@@ -156,10 +162,30 @@ public sealed class DependencyResolver : IDependencyResolver
         var nearest = reducer.GetNearest(projectFw, candidates);
 
         if (nearest is not null && indexByFw.TryGetValue(nearest, out var idx))
-            return ConvertDeps(metadata.DependencyGroups[idx].Dependencies);
+        {
+            var deps = ConvertDeps(metadata.DependencyGroups[idx].Dependencies);
 
-        // No compatible group found — package has no deps applicable to this TFM.
-        return Array.Empty<PackageDependency>();
+            // Warn when the package has TFM-specific groups but none matches the project TFM
+            // exactly — the resolver is silently falling back to a different TFM group.
+            ResolutionWarning? warning = null;
+            if (nearest != projectFw && nearest != NuGetFramework.AnyFramework)
+            {
+                var available = candidates
+                    .Where(c => c != NuGetFramework.AnyFramework)
+                    .Select(c => c.GetShortFolderName())
+                    .Distinct()
+                    .OrderBy(s => s);
+                warning = new ResolutionWarning(id, version,
+                    $"{id.Value} {version} has no dependency group for {targetFramework}. " +
+                    $"Using {nearest.GetShortFolderName()} group. " +
+                    $"Available: {string.Join(", ", available)}. " +
+                    "This may pull in packages not compatible with your target.");
+            }
+            return (deps, warning);
+        }
+
+        // No compatible group at all.
+        return (Array.Empty<PackageDependency>(), null);
     }
 
     private static IReadOnlyList<PackageDependency> ConvertDeps(IReadOnlyList<RawDependency> deps)
