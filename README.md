@@ -122,7 +122,7 @@ consistent.
 ## Layout on disk
 
 ```
-C:\Users\carana\Desktop\pnuget\
+C:\Users\carana\Desktop\pcpm\
 ├── pcpm.slnx                          # solution
 ├── Directory.Packages.props           # CPM file (pcpm itself uses CPM)
 ├── Directory.Build.props              # common MSBuild (warnings as errors, nullable, etc.)
@@ -161,4 +161,4 @@ The test suite covers:
 
 ## License
 
-TBD.
+MIT.
