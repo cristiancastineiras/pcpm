@@ -64,6 +64,15 @@
           Link="README.md"
           Pack="true"
           PackagePath="/README.md" />
+    <!--
+      Stage the package icon. The SDK only honours <PackageIcon> when the file
+      is explicitly packed (it does NOT auto-include a sibling icon.png), so
+      the file would otherwise be missing from the .nupkg and fail with
+      NU5046 ("The icon file 'icon.png' does not exist in the package").
+    -->
+    <None Include="icon.png"
+          Pack="true"
+          PackagePath="/icon.png" />
   </ItemGroup>
 
   <ItemGroup>
