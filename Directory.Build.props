@@ -12,4 +12,25 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+
+  <!--
+    Common NuGet metadata shared by every package produced from this repo.
+    pcpm.Cli overrides PackageId/PackageReadmeFile in its own csproj.
+  -->
+  <PropertyGroup>
+    <Authors>PCPM Contributors</Authors>
+    <Copyright>Copyright © 2026 PCPM Contributors</Copyright>
+    <Product>pcpm</Product>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryType>git</RepositoryType>
+    <RepositoryUrl>https://github.com/cristiancastineiras/pcpm</RepositoryUrl>
+    <PackageTags>pcpm;nuget;package-manager;dotnet;msbuild;cpm;central-package-management;pnpm;monorepo;disk-space;hardlink;content-addressable-store</PackageTags>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <!--
+      By default only pcpm.Cli is packable; the sibling projects are built
+      and copied into the CLI's output (fat tool) but never published
+      standalone to nuget.org.
+    -->
+    <IsPackable Condition="'$(IsPackable)' == '' and '$(MSBuildProjectName)' != 'pcpm.Cli'">false</IsPackable>
+  </PropertyGroup>
 </Project>

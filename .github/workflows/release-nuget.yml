@@ -1,0 +1,98 @@
+name: release-nuget
+
+# Triggered when a semver-style tag (e.g. v1.2.3, v1.2.3-rc.1) is pushed.
+# The version published to nuget.org is the tag name with the leading "v" stripped.
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+# Cancel any in-flight run for the same tag (re-push, retry) and never trigger
+# downstream workflow runs from this one.
+concurrency:
+  group: release-nuget-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-pack-push:
+    name: build / test / pack / push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          # Pin to the exact version that global.json requires. The SDK installer
+          # caches it under ~/.dotnet for the next run.
+          dotnet-version: '10.0.202'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/Directory.Packages.props', '**/Directory.Build.props', '**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          # "v1.2.3-rc.1" -> "1.2.3-rc.1"
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Resolved NuGet version: $VERSION"
+
+      - name: Restore
+        run: dotnet restore --locked-mode
+
+      - name: Build (Release)
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Test (Release)
+        run: dotnet test --no-build --configuration Release --verbosity normal
+
+      - name: Pack pcpm.Cli
+        run: |
+          dotnet pack src/pcpm.Cli/pcpm.Cli.csproj \
+            --no-build \
+            --configuration Release \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -p:ContinuousIntegrationBuild=true \
+            -o ./artifacts
+
+      - name: Inspect generated packages
+        run: ls -lh ./artifacts
+
+      - name: Push to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        shell: bash
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::NUGET_API_KEY secret is not set. Add it in repo Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          # --skip-duplicate so a re-run on the same tag is a no-op rather than a hard failure.
+          # nuget.org permanently reserves every uploaded version, so re-uploading is impossible anyway.
+          dotnet nuget push "./artifacts/*.nupkg" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Summarise
+        if: always()
+        shell: bash
+        run: |
+          echo "### Release summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Tag: \`${GITHUB_REF_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Version: \`${{ steps.version.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Commit: \`${GITHUB_SHA}\`" >> "$GITHUB_STEP_SUMMARY"

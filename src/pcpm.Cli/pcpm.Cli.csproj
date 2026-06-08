@@ -5,11 +5,70 @@
     <RootNamespace>pcpm.Cli</RootNamespace>
     <AssemblyName>pcpm</AssemblyName>
     <Description>pcpm — a fast, disk space efficient package manager for .NET, built on Central Package Management.</Description>
+
+    <!--
+      Pack as a "fat" .NET tool. The pcpm.Core / pcpm.Infrastructure DLLs are built
+      into our output (via ProjectReference) and shipped inside this single package,
+      so users can `dotnet tool install -g pcpm` and get a self-contained CLI.
+      PrivateAssets="all" on those refs keeps them out of the generated .nuspec
+      dependency list — they are bundled, not referenced.
+    -->
+    <IsPackable>true</IsPackable>
+    <PackageId>pcpm</PackageId>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>pcpm</ToolCommandName>
+    <!-- In-package readme name; the actual file is staged below as a None item. -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <Authors>Cristian Arana Castiñeiras</Authors>
+    <RequireLicenseAcceptance>false</RequireLicenseAcceptance>
+    <PackageTags>
+      dotnet
+      package-manager
+      cli
+      tool
+      pcpm
+      npm
+      central-package-management
+      csharp
+      .NET
+      .NETCore
+      CPM
+      performance
+      disk-space-efficiency
+      monorepo
+      monorepos
+      monorepo-support
+      multi-package-repository
+      multi-package-repositories
+      multi-targeting
+      multi-targeting-support
+      msbuild
+      msbuild-integration
+    </PackageTags>
+		<RepositoryType>git</RepositoryType>
+		<RepositoryUrl>https://github.com/cristiancastineiras/pcpm</RepositoryUrl>
+		<PackageLicenseExpression>MIT</PackageLicenseExpression>
+
+
   </PropertyGroup>
 
+  <!--
+    Stage the repo-root README into the package root. PackagePath uses
+    forward slashes (the SDK does not normalize backslashes consistently
+    across all targets on Windows, and a normalised readme path is required
+    for the NU5039 validation to pass).
+  -->
   <ItemGroup>
-    <ProjectReference Include="..\pcpm.Core\pcpm.Core.csproj" />
-    <ProjectReference Include="..\pcpm.Infrastructure\pcpm.Infrastructure.csproj" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\README.md"
+          Link="README.md"
+          Pack="true"
+          PackagePath="/README.md" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\pcpm.Core\pcpm.Core.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\pcpm.Infrastructure\pcpm.Infrastructure.csproj" PrivateAssets="all" />
     <!--
       ReferenceOutputAssembly=false: pcpm.MsBuild is a task DLL, not a runtime dependency.
       We still need it built before pcpm.Cli so we can copy it to the output directory,

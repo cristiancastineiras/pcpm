@@ -88,3 +88,7 @@ Desktop.ini
 
 ## pcpm local
 .pcpm/
+
+# Local release-test scratch (kept out of the repo on purpose)
+artifacts-test/
+nuget.test.config
